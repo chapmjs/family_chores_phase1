@@ -1,6 +1,7 @@
 """
 Family Chores App - Phase 1
 Streamlit application with MySQL backend
+Database credentials managed via Streamlit secrets
 """
 
 import streamlit as st
@@ -19,30 +20,21 @@ st.set_page_config(
     layout="wide"
 )
 
-# Database connection configuration
-# Update these with your actual database credentials
-DB_CONFIG = {
-    'host': 'localhost',  # or your MySQL server host
-    'database': 'family_chores',
-    'user': 'your_username',  # Update this
-    'password': 'your_password'  # Update this
-}
-
-# You can also use environment variables for security:
-# DB_CONFIG = {
-#     'host': os.getenv('DB_HOST', 'localhost'),
-#     'database': os.getenv('DB_NAME', 'family_chores'),
-#     'user': os.getenv('DB_USER'),
-#     'password': os.getenv('DB_PASSWORD')
-# }
-
+# Database connection using Streamlit secrets
 def get_db_connection():
-    """Create and return a database connection"""
+    """Create and return a database connection using Streamlit secrets"""
     try:
-        connection = mysql.connector.connect(**DB_CONFIG)
+        connection = mysql.connector.connect(
+            host=st.secrets["database"]["host"],
+            database=st.secrets["database"]["database"],
+            user=st.secrets["database"]["user"],
+            password=st.secrets["database"]["password"],
+            port=st.secrets["database"].get("port", 3306)
+        )
         return connection
     except Error as e:
         st.error(f"Error connecting to MySQL database: {e}")
+        st.info("💡 Make sure you've created .streamlit/secrets.toml with your database credentials")
         return None
 
 def get_all_people():
@@ -110,7 +102,6 @@ def assign_chore(chore_id, person_id, assigned_date):
     if conn:
         try:
             cursor = conn.cursor()
-            # Check if assignment already exists
             cursor.execute(
                 "SELECT id FROM assignments WHERE chore_id = %s AND assigned_date = %s",
                 (chore_id, assigned_date)
@@ -118,13 +109,11 @@ def assign_chore(chore_id, person_id, assigned_date):
             existing = cursor.fetchone()
             
             if existing:
-                # Update existing assignment
                 cursor.execute(
                     "UPDATE assignments SET person_id = %s WHERE chore_id = %s AND assigned_date = %s",
                     (person_id, chore_id, assigned_date)
                 )
             else:
-                # Insert new assignment
                 cursor.execute(
                     "INSERT INTO assignments (chore_id, person_id, assigned_date) VALUES (%s, %s, %s)",
                     (chore_id, person_id, assigned_date)
@@ -144,10 +133,7 @@ def copy_previous_day_assignments(from_date, to_date):
     if conn:
         try:
             cursor = conn.cursor()
-            # Delete any existing assignments for the target date
             cursor.execute("DELETE FROM assignments WHERE assigned_date = %s", (to_date,))
-            
-            # Copy assignments from previous date
             query = """
                 INSERT INTO assignments (chore_id, person_id, assigned_date)
                 SELECT chore_id, person_id, %s
@@ -171,10 +157,8 @@ def mark_chore_complete(assignment_id, actual_minutes, photo_data=None, photo_fi
         try:
             cursor = conn.cursor()
             
-            # Save photo if provided
             saved_filename = None
             if photo_data and photo_filename:
-                # Create uploads directory if it doesn't exist
                 os.makedirs("chore_photos", exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 saved_filename = f"{timestamp}_{photo_filename}"
@@ -183,7 +167,6 @@ def mark_chore_complete(assignment_id, actual_minutes, photo_data=None, photo_fi
                 with open(filepath, "wb") as f:
                     f.write(photo_data)
             
-            # Insert completion record
             cursor.execute(
                 """INSERT INTO completions (assignment_id, actual_minutes, photo_filename)
                    VALUES (%s, %s, %s)""",
@@ -198,27 +181,10 @@ def mark_chore_complete(assignment_id, actual_minutes, photo_data=None, photo_fi
             conn.close()
     return False
 
-def delete_assignment(assignment_id):
-    """Delete a chore assignment"""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM assignments WHERE id = %s", (assignment_id,))
-            conn.commit()
-            return True
-        except Error as e:
-            st.error(f"Error deleting assignment: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
-
 # Main App
 def main():
     st.title("🏠 Family Chores Tracker - Phase 1")
     
-    # Sidebar navigation
     page = st.sidebar.radio("Navigation", 
                            ["📋 Assign Chores", 
                             "✅ Complete Chores",
@@ -238,7 +204,6 @@ def assign_chores_page():
     """Page for assigning chores to family members"""
     st.header("📋 Assign Chores")
     
-    # Date selector
     col1, col2, col3 = st.columns([2, 2, 2])
     with col1:
         selected_date = st.date_input("Select Date", value=date.today())
@@ -266,7 +231,6 @@ def assign_chores_page():
                 finally:
                     conn.close()
     
-    # Get all chores and people
     chores = get_all_chores()
     people = get_all_people()
     
@@ -274,13 +238,11 @@ def assign_chores_page():
         st.warning("Please ensure chores and family members are loaded in the database.")
         return
     
-    # Get existing assignments for the date
     existing_assignments = get_assignments_for_date(selected_date)
     assignment_dict = {a['chore_id']: a['person_id'] for a in existing_assignments}
     
     st.subheader(f"Assign Chores for {selected_date}")
     
-    # Group chores by room
     chores_by_room = {}
     for chore in chores:
         room = chore['room']
@@ -288,7 +250,6 @@ def assign_chores_page():
             chores_by_room[room] = []
         chores_by_room[room].append(chore)
     
-    # Create assignment interface
     people_names = [p['name'] for p in people]
     people_dict = {p['name']: p['id'] for p in people}
     
@@ -336,17 +297,13 @@ def complete_chores_page():
     """Page for marking chores as complete"""
     st.header("✅ Complete Chores")
     
-    # Date selector
     selected_date = st.date_input("Select Date", value=date.today())
-    
-    # Get assignments for the date
     assignments = get_assignments_for_date(selected_date)
     
     if not assignments:
         st.info(f"No chores assigned for {selected_date}")
         return
     
-    # Filter options
     col1, col2 = st.columns(2)
     with col1:
         filter_person = st.selectbox("Filter by Person", 
@@ -354,21 +311,18 @@ def complete_chores_page():
     with col2:
         show_completed = st.checkbox("Show Completed", value=True)
     
-    # Filter assignments
     filtered_assignments = assignments
     if filter_person != "All":
         filtered_assignments = [a for a in filtered_assignments if a['assigned_to'] == filter_person]
     if not show_completed:
         filtered_assignments = [a for a in filtered_assignments if not a['is_completed']]
     
-    # Display assignments
     st.subheader(f"Chores for {selected_date}")
     
     incomplete_count = sum(1 for a in assignments if not a['is_completed'])
     complete_count = len(assignments) - incomplete_count
     st.write(f"**Progress:** {complete_count}/{len(assignments)} completed")
     
-    # Group by room
     assignments_by_room = {}
     for assignment in filtered_assignments:
         room = assignment['room']
@@ -392,7 +346,6 @@ def complete_chores_page():
                         st.write(f"**{assignment['task']}** - Assigned to: {assignment['assigned_to']} " +
                                f"(est. {assignment['estimated_time']} min)")
                     
-                    # Completion form
                     with st.form(f"complete_{assignment['assignment_id']}"):
                         col_a, col_b, col_c = st.columns([2, 2, 1])
                         
@@ -432,14 +385,12 @@ def view_assignments_page():
     """Page for viewing assignments summary"""
     st.header("📊 View Assignments")
     
-    # Date range selector
     col1, col2 = st.columns(2)
     with col1:
         start_date = st.date_input("Start Date", value=date.today() - timedelta(days=7))
     with col2:
         end_date = st.date_input("End Date", value=date.today())
     
-    # Get assignments for date range
     conn = get_db_connection()
     if not conn:
         st.error("Could not connect to database")
@@ -469,7 +420,6 @@ def view_assignments_page():
         if results:
             df = pd.DataFrame(results)
             
-            # Summary statistics
             st.subheader("Summary")
             col1, col2, col3 = st.columns(3)
             
@@ -481,11 +431,9 @@ def view_assignments_page():
             col2.metric("Completed", completed_tasks)
             col3.metric("Completion Rate", f"{completion_rate:.1f}%")
             
-            # Detailed table
             st.subheader("Detailed View")
             st.dataframe(df, use_container_width=True)
             
-            # Download option
             csv = df.to_csv(index=False)
             st.download_button(
                 label="Download CSV",
